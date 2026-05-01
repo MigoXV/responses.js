@@ -3,6 +3,8 @@ FROM node:18-alpine AS builder
 
 # Install pnpm as root
 RUN corepack enable && corepack prepare pnpm@10.10.0 --activate
+RUN npm config set registry https://registry.npmmirror.com && \
+    pnpm config set registry https://registry.npmmirror.com
 
 USER node
 ENV HOME=/home/node \

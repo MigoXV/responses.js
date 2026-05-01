@@ -2,6 +2,7 @@ import { type Response as ExpressResponse } from "express";
 import { type ValidatedRequest } from "../middleware/validation.js";
 import type { CreateResponseParams, McpServerParams, McpApprovalRequestParams } from "../schemas.js";
 import { generateUniqueId } from "../lib/generateUniqueId.js";
+import { resolveUpstreamApiKey } from "../lib/auth.js";
 import { OpenAI } from "openai";
 import type {
 	Response,
@@ -24,6 +25,7 @@ import type {
 } from "openai/resources/chat/completions.js";
 import type { FunctionParameters } from "openai/resources/shared.js";
 import { callMcpTool, connectMcpServer } from "../mcp.js";
+import { createLogger, isStreamEventsLoggingEnabled } from "../lib/logger.js";
 
 class StreamingError extends Error {
 	constructor(message: string) {
@@ -32,7 +34,10 @@ class StreamingError extends Error {
 	}
 }
 
-type IncompleteResponse = Omit<Response, "incomplete_details" | "output_text" | "parallel_tool_calls">;
+type ResponseRequestTool = NonNullable<CreateResponseParams["tools"]>[number];
+type IncompleteResponse = Omit<Response, "incomplete_details" | "output_text" | "parallel_tool_calls" | "tools"> & {
+	tools: ResponseRequestTool[];
+};
 const SEQUENCE_NUMBER_PLACEHOLDER = -1;
 
 // All headers are forwarded by default, except these ones.
@@ -52,28 +57,59 @@ const NOT_FORWARDED_HEADERS = new Set([
 	"upgrade",
 ]);
 
+const isDeepseekModel = (model: string): boolean => model.toLowerCase().includes("deepseek");
+const logger = createLogger("responses");
+
+function shouldLogStreamDebug(): boolean {
+	return isStreamEventsLoggingEnabled();
+}
+
 export const postCreateResponse = async (
 	req: ValidatedRequest<CreateResponseParams>,
 	res: ExpressResponse
 ): Promise<void> => {
+	const upstreamApiKey = resolveUpstreamApiKey(req.headers.authorization);
+	if (!upstreamApiKey.apiKey) {
+		res.status(401).json({
+			success: false,
+			error: "Unauthorized",
+		});
+		return;
+	}
+
 	// To avoid duplicated code, we run all requests as stream.
-	const events = runCreateResponseStream(req, res);
+	const events = runCreateResponseStream(req, upstreamApiKey.apiKey);
 
 	// Then we return in the correct format depending on the user 'stream' flag.
 	if (req.body.stream) {
 		res.setHeader("Content-Type", "text/event-stream");
 		res.setHeader("Connection", "keep-alive");
-		console.debug("Stream request");
+		if (shouldLogStreamDebug()) {
+			logger.debug("stream request started", {
+				response_id: req.body.metadata?.response_id,
+			});
+		}
 		for await (const event of events) {
-			console.debug(`Event #${event.sequence_number}: ${event.type}`);
+			if (shouldLogStreamDebug()) {
+				logger.debug("stream event", {
+					sequence_number: event.sequence_number,
+					event_type: event.type,
+				});
+			}
 			res.write(`data: ${JSON.stringify(event)}\n\n`);
 		}
 		res.end();
 	} else {
-		console.debug("Non-stream request");
+		if (shouldLogStreamDebug()) {
+			logger.debug("non-stream request started");
+		}
 		for await (const event of events) {
 			if (event.type === "response.completed" || event.type === "response.failed") {
-				console.debug(event.type);
+				if (shouldLogStreamDebug()) {
+					logger.debug("non-stream terminal event", {
+						event_type: event.type,
+					});
+				}
 				res.json(event.response);
 			}
 		}
@@ -88,7 +124,7 @@ export const postCreateResponse = async (
  */
 async function* runCreateResponseStream(
 	req: ValidatedRequest<CreateResponseParams>,
-	res: ExpressResponse
+	upstreamApiKey: string
 ): AsyncGenerator<PatchedResponseStreamEvent> {
 	let sequenceNumber = 0;
 	// Prepare response object that will be iteratively populated
@@ -134,12 +170,14 @@ async function* runCreateResponseStream(
 
 	// Any events (LLM call, MCP call, list tools, etc.)
 	try {
-		for await (const event of innerRunStream(req, res, responseObject)) {
+		for await (const event of innerRunStream(req, responseObject, upstreamApiKey)) {
 			yield { ...event, sequence_number: sequenceNumber++ };
 		}
 	} catch (error) {
 		// Error event => stop
-		console.error("Error in stream:", error);
+		logger.error("response stream failed", {
+			error,
+		});
 
 		const message =
 			typeof error === "object" &&
@@ -173,19 +211,9 @@ async function* runCreateResponseStream(
 
 async function* innerRunStream(
 	req: ValidatedRequest<CreateResponseParams>,
-	res: ExpressResponse,
-	responseObject: IncompleteResponse
+	responseObject: IncompleteResponse,
+	upstreamApiKey: string
 ): AsyncGenerator<PatchedResponseStreamEvent> {
-	// Retrieve API key from headers
-	const apiKey = req.headers.authorization?.split(" ")[1];
-	if (!apiKey) {
-		res.status(401).json({
-			success: false,
-			error: "Unauthorized",
-		});
-		return;
-	}
-
 	// Forward headers (except authorization handled separately)
 	const defaultHeaders = Object.fromEntries(
 		Object.entries(req.headers).filter(([key]) => !NOT_FORWARDED_HEADERS.has(key.toLowerCase()))
@@ -213,6 +241,10 @@ async function* innerRunStream(
 						},
 					});
 					break;
+				case "web_search":
+					// Responses hosted tools do not have a Chat Completions equivalent here,
+					// so accept them at the API boundary but do not forward them downstream.
+					break;
 				case "mcp": {
 					let mcpListTools: ResponseOutputItem.McpListTools | undefined;
 
@@ -221,7 +253,11 @@ async function* innerRunStream(
 						for (const item of req.body.input) {
 							if (item.type === "mcp_list_tools" && item.server_label === tool.server_label) {
 								mcpListTools = item;
-								console.debug(`Using MCP list tools from input for server '${tool.server_label}'`);
+								if (shouldLogStreamDebug()) {
+									logger.debug("using MCP tools from request input", {
+										server_label: tool.server_label,
+									});
+								}
 								break;
 							}
 						}
@@ -265,6 +301,7 @@ async function* innerRunStream(
 	}
 
 	// Prepare payload for the LLM
+	const useDeepseekHistoryCompatibility = isDeepseekModel(req.body.model);
 
 	// Format input to Chat Completion format
 	const messages: ChatCompletionMessageParam[] = req.body.instructions
@@ -276,12 +313,24 @@ async function* innerRunStream(
 				.map((item) => {
 					switch (item.type) {
 						case "function_call":
+							if (useDeepseekHistoryCompatibility) {
+								return {
+									role: "assistant" as const,
+									content: `Function call (${item.call_id}). Name: '${item.name}'. Arguments: '${item.arguments}'.`,
+								};
+							}
 							return {
 								role: "tool" as const,
 								content: item.arguments,
 								tool_call_id: item.call_id,
 							};
 						case "function_call_output":
+							if (useDeepseekHistoryCompatibility) {
+								return {
+									role: "assistant" as const,
+									content: `Function call output (${item.call_id}). Output: '${item.output}'.`,
+								};
+							}
 							return {
 								role: "tool" as const,
 								content: item.output,
@@ -336,6 +385,12 @@ async function* innerRunStream(
 							}
 							return undefined;
 						case "mcp_list_tools": {
+							if (useDeepseekHistoryCompatibility) {
+								return {
+									role: "assistant" as const,
+									content: `MCP list tools. Server: '${item.server_label}'.`,
+								};
+							}
 							return {
 								role: "tool" as const,
 								content: "MCP list tools. Server: '${item.server_label}'.",
@@ -343,6 +398,12 @@ async function* innerRunStream(
 							};
 						}
 						case "mcp_call": {
+							if (useDeepseekHistoryCompatibility) {
+								return {
+									role: "assistant" as const,
+									content: `MCP call (${item.id}). Server: '${item.server_label}'. Tool: '${item.name}'. Arguments: '${item.arguments}'.`,
+								};
+							}
 							return {
 								role: "tool" as const,
 								content: `MCP call (${item.id}). Server: '${item.server_label}'. Tool: '${item.name}'. Arguments: '${item.arguments}'.`,
@@ -350,6 +411,12 @@ async function* innerRunStream(
 							};
 						}
 						case "mcp_approval_request": {
+							if (useDeepseekHistoryCompatibility) {
+								return {
+									role: "assistant" as const,
+									content: `MCP approval request (${item.id}). Server: '${item.server_label}'. Tool: '${item.name}'. Arguments: '${item.arguments}'.`,
+								};
+							}
 							return {
 								role: "tool" as const,
 								content: `MCP approval request (${item.id}). Server: '${item.server_label}'. Tool: '${item.name}'. Arguments: '${item.arguments}'.`,
@@ -357,6 +424,12 @@ async function* innerRunStream(
 							};
 						}
 						case "mcp_approval_response": {
+							if (useDeepseekHistoryCompatibility) {
+								return {
+									role: "assistant" as const,
+									content: `MCP approval response (${item.id}). Approved: ${item.approve}. Reason: ${item.reason}.`,
+								};
+							}
 							return {
 								role: "tool" as const,
 								content: `MCP approval response (${item.id}). Approved: ${item.approve}. Reason: ${item.reason}.`,
@@ -451,7 +524,13 @@ async function* innerRunStream(
 	do {
 		previousMessageCount = currentMessageCount;
 
-		for await (const event of handleOneTurnStream(apiKey, payload, responseObject, mcpToolsMapping, defaultHeaders)) {
+		for await (const event of handleOneTurnStream(
+			upstreamApiKey,
+			payload,
+			responseObject,
+			mcpToolsMapping,
+			defaultHeaders
+		)) {
 			yield event;
 		}
 
@@ -505,7 +584,10 @@ async function* listMcpToolsStream(
 		};
 	} catch (error) {
 		const errorMessage = `Failed to list tools from MCP server '${tool.server_label}': ${error instanceof Error ? error.message : "Unknown error"}`;
-		console.error(errorMessage);
+		logger.error("failed to list MCP tools", {
+			server_label: tool.server_label,
+			error,
+		});
 		yield {
 			type: "response.mcp_list_tools.failed",
 			sequence_number: SEQUENCE_NUMBER_PLACEHOLDER,
@@ -688,7 +770,9 @@ async function* handleOneTurnStream(
 			}
 		} else if (delta.tool_calls && delta.tool_calls.length > 0) {
 			if (delta.tool_calls.length > 1) {
-				console.log("Multiple tool calls are not supported. Only the first one will be processed.");
+				logger.warn("multiple tool calls are not supported; only the first call will be processed", {
+					tool_call_count: delta.tool_calls.length,
+				});
 			}
 
 			let currentOutputItem = responseObject.output.at(-1);

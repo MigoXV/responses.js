@@ -73,6 +73,12 @@ const mcpCallParamsSchema = z.object({
 	arguments: z.string(),
 });
 
+const webSearchToolSchema = z
+	.object({
+		type: z.literal("web_search"),
+	})
+	.passthrough();
+
 export const createResponseParamsSchema = z.object({
 	// background: z.boolean().default(false),
 	// include:
@@ -165,6 +171,7 @@ export const createResponseParamsSchema = z.object({
 			effort: z.enum(["low", "medium", "high"]).default("medium"),
 			summary: z.enum(["auto", "concise", "detailed"]).nullable().default(null),
 		})
+		.nullable()
 		.optional(),
 	// store: z.boolean().default(true),
 	stream: z.boolean().default(false),
@@ -211,6 +218,7 @@ export const createResponseParamsSchema = z.object({
 					type: z.literal("function"),
 					description: z.string().optional(),
 				}),
+				webSearchToolSchema,
 				mcpServerParamsSchema,
 			])
 		)

@@ -4,6 +4,9 @@
 
 import { type Request, type Response, type NextFunction } from "express";
 import { z } from "zod";
+import { createLogger } from "../lib/logger.js";
+
+const logger = createLogger("validation");
 
 /**
  * Middleware to validate request body against a Zod schema
@@ -18,13 +21,25 @@ export function validateBody<T extends z.ZodTypeAny>(schema: T) {
 			next();
 		} catch (error) {
 			if (error instanceof z.ZodError) {
-				console.log(req.body);
+				const firstIssue = error.errors[0];
+				logger.warn("request validation failed", {
+					method: req.method,
+					url: req.originalUrl || req.url,
+					error_count: error.errors.length,
+					first_error_path: firstIssue?.path.join(".") || "(root)",
+					first_error_message: firstIssue?.message,
+				});
 				res.status(400).json({
 					success: false,
 					error: error.errors,
 					details: error.errors,
 				});
 			} else {
+				logger.error("request validation failed with unexpected error", {
+					method: req.method,
+					url: req.originalUrl || req.url,
+					error,
+				});
 				res.status(500).json({
 					success: false,
 					error: "Internal server error",

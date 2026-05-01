@@ -63,6 +63,58 @@ export interface McpApprovalRequestItem {
 
 export type Item = MessageItem | ToolCallItem | McpListToolsItem | McpApprovalRequestItem;
 
+const isAllowedAssistantContentItem = (contentItem: any) =>
+	contentItem && (contentItem.type === "output_text" || contentItem.type === "refusal");
+
+const sanitizeConversationItem = (item: any) => {
+	if (!item || typeof item !== "object") {
+		return null;
+	}
+
+	if (item.type === "reasoning") {
+		return null;
+	}
+
+	if (!item.type || item.type === "message") {
+		if (!["user", "assistant", "system", "developer"].includes(item.role)) {
+			return null;
+		}
+
+		if (typeof item.content === "string") {
+			return item;
+		}
+
+		if (!Array.isArray(item.content)) {
+			return null;
+		}
+
+		if (item.role === "assistant") {
+			const content = item.content.filter(isAllowedAssistantContentItem);
+			if (content.length === 0) {
+				return null;
+			}
+			return { ...item, content };
+		}
+
+		return item;
+	}
+
+	if (
+		item.type === "function_call" ||
+		item.type === "function_call_output" ||
+		item.type === "mcp_list_tools" ||
+		item.type === "mcp_approval_request" ||
+		item.type === "mcp_approval_response" ||
+		item.type === "mcp_call"
+	) {
+		return item;
+	}
+
+	return null;
+};
+
+const sanitizeConversationItems = (items: any[]) => items.map(sanitizeConversationItem).filter(Boolean);
+
 export const handleTurn = async (messages: any[], tools: any[], onMessage: (data: any) => void) => {
 	try {
 		// Get response from the API (defined in app/api/turn_response/route.ts)
@@ -126,13 +178,17 @@ export const processMessages = async () => {
 		useConversationStore.getState();
 
 	const tools = getTools();
+	const sanitizedConversationItems = sanitizeConversationItems(conversationItems);
+	if (sanitizedConversationItems.length !== conversationItems.length) {
+		setConversationItems(sanitizedConversationItems);
+	}
 	const allConversationItems = [
 		// Adding system prompt as first item in the conversation
 		{
 			role: "system",
 			content: SYSTEM_PROMPT,
 		},
-		...conversationItems,
+		...sanitizedConversationItems,
 	];
 
 	let assistantMessageContent = "";
@@ -297,8 +353,11 @@ export const processMessages = async () => {
 					toolCallMessage.call_id = item.call_id;
 					setChatMessages([...chatMessages]);
 				}
-				conversationItems.push(item);
-				setConversationItems([...conversationItems]);
+				const sanitizedItem = sanitizeConversationItem(item);
+				if (sanitizedItem) {
+					conversationItems.push(sanitizedItem);
+					setConversationItems([...conversationItems]);
+				}
 				if (toolCallMessage && toolCallMessage.type === "tool_call" && toolCallMessage.tool_type === "function_call") {
 					// Handle tool call (execute function)
 					const toolResult = await handleTool(
