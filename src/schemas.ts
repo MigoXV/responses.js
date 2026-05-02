@@ -73,98 +73,115 @@ const mcpCallParamsSchema = z.object({
 	arguments: z.string(),
 });
 
-export const createResponseParamsSchema = z.object({
-	// background: z.boolean().default(false),
-	// include:
-	input: z.union([
-		z.string(),
-		z.array(
+export const responseInputItemSchema = z.union([
+	z.object({
+		content: z.union([z.string(), inputContentSchema]),
+		role: z.enum(["user", "assistant", "system", "developer"]),
+		type: z.enum(["message"]).default("message"),
+	}),
+	z.object({
+		role: z.enum(["user", "system", "developer"]),
+		status: z.enum(["in_progress", "completed", "incomplete"]).nullable().default(null),
+		content: inputContentSchema,
+		type: z.enum(["message"]).default("message"),
+	}),
+	z.object({
+		id: z.string().optional(),
+		role: z.enum(["assistant"]),
+		status: z.enum(["in_progress", "completed", "incomplete"]).optional(),
+		type: z.enum(["message"]).default("message"),
+		content: z.array(
 			z.union([
 				z.object({
-					content: z.union([z.string(), inputContentSchema]),
-					role: z.enum(["user", "assistant", "system", "developer"]),
-					type: z.enum(["message"]).default("message"),
+					type: z.literal("output_text"),
+					text: z.string(),
+					annotations: z.array(z.record(z.any())).nullable().optional(), // TODO: incomplete
+					logprobs: z.array(z.record(z.any())).nullable().optional(), // TODO: incomplete
 				}),
 				z.object({
-					role: z.enum(["user", "system", "developer"]),
-					status: z.enum(["in_progress", "completed", "incomplete"]).nullable().default(null),
-					content: inputContentSchema,
-					type: z.enum(["message"]).default("message"),
+					type: z.literal("refusal"),
+					refusal: z.string(),
 				}),
-				z.object({
-					id: z.string().optional(),
-					role: z.enum(["assistant"]),
-					status: z.enum(["in_progress", "completed", "incomplete"]).optional(),
-					type: z.enum(["message"]).default("message"),
-					content: z.array(
-						z.union([
-							z.object({
-								type: z.literal("output_text"),
-								text: z.string(),
-								annotations: z.array(z.record(z.any())).nullable().optional(), // TODO: incomplete
-								logprobs: z.array(z.record(z.any())).nullable().optional(), // TODO: incomplete
-							}),
-							z.object({
-								type: z.literal("refusal"),
-								refusal: z.string(),
-							}),
-							// TODO: much more objects: File search tool call, Computer tool call, Computer tool call output, Web search tool call, Function tool call, Function tool call output, Reasoning, Image generation call, Code interpreter tool call, Local shell call, Local shell call output, MCP list tools, MCP approval request, MCP approval response, MCP tool call
-						])
-					),
-				}),
-				z.object({
-					type: z.literal("function_call"),
-					id: z.string().optional(),
-					call_id: z.string(),
-					name: z.string(),
-					arguments: z.string(),
-					status: z.enum(["in_progress", "completed", "incomplete"]).optional(),
-				}),
-				z.object({
-					call_id: z.string(),
-					output: z.string(),
-					type: z.literal("function_call_output"),
-					id: z.string().optional(),
-					status: z.enum(["in_progress", "completed", "incomplete"]).optional(),
-				}),
-				z.object({
-					type: z.literal("mcp_list_tools"),
-					id: z.string(),
-					server_label: z.string(),
-					tools: z.array(
-						z.object({
-							name: z.string(),
-							input_schema: z.record(z.any()),
-							description: z.string().nullable().optional(),
-							annotations: z.object({}).optional(),
-						})
-					),
-					error: z.string().nullable().optional(),
-				}),
-				mcpApprovalRequestParamsSchema,
-				mcpApprovalResponseParamsSchema,
-				mcpCallParamsSchema,
+				// TODO: much more objects: File search tool call, Computer tool call, Computer tool call output, Web search tool call, Function tool call, Function tool call output, Reasoning, Image generation call, Code interpreter tool call, Local shell call, Local shell call output, MCP list tools, MCP approval request, MCP approval response, MCP tool call
 			])
 		),
-	]),
+	}),
+	z.object({
+		type: z.literal("function_call"),
+		id: z.string().optional(),
+		call_id: z.string(),
+		name: z.string(),
+		arguments: z.string(),
+		status: z.enum(["in_progress", "completed", "incomplete"]).optional(),
+	}),
+	z.object({
+		call_id: z.string(),
+		output: z.string(),
+		type: z.literal("function_call_output"),
+		id: z.string().optional(),
+		status: z.enum(["in_progress", "completed", "incomplete"]).optional(),
+	}),
+	z.object({
+		type: z.literal("mcp_list_tools"),
+		id: z.string(),
+		server_label: z.string(),
+		tools: z.array(
+			z.object({
+				name: z.string(),
+				input_schema: z.record(z.any()),
+				description: z.string().nullable().optional(),
+				annotations: z.object({}).optional(),
+			})
+		),
+		error: z.string().nullable().optional(),
+	}),
+	mcpApprovalRequestParamsSchema,
+	mcpApprovalResponseParamsSchema,
+	mcpCallParamsSchema,
+]);
+
+export const responseInputSchema = z.array(responseInputItemSchema);
+
+const metadataSchema = z
+	.record(z.string().max(64), z.string().max(512))
+	.refine((val) => Object.keys(val).length <= 16, {
+		message: "Must have at most 16 items",
+	})
+	.nullable()
+	.default(null);
+
+const webSearchToolSchema = z
+	.object({
+		type: z.literal("web_search"),
+	})
+	.passthrough();
+
+const createResponseParamsBaseSchema = z.object({
+	// background: z.boolean().default(false),
+	// include:
+	input: z.union([z.string(), responseInputSchema]).optional(),
+	conversation: z
+		.union([
+			z.string(),
+			z.object({
+				id: z.string(),
+			}),
+		])
+		.nullable()
+		.default(null),
 	instructions: z.string().nullable().default(null),
 	max_output_tokens: z.number().int().min(0).nullable().default(null),
 	// max_tool_calls: z.number().min(0).nullable().default(null),
-	metadata: z
-		.record(z.string().max(64), z.string().max(512))
-		.refine((val) => Object.keys(val).length <= 16, {
-			message: "Must have at most 16 items",
-		})
-		.nullable()
-		.default(null),
+	metadata: metadataSchema,
 	model: z.string(),
 	// parallel_tool_calls: z.boolean().default(true), // TODO: how to handle this if chat completion doesn't?
-	// previous_response_id: z.string().nullable().default(null),
+	previous_response_id: z.string().nullable().default(null),
 	reasoning: z
 		.object({
 			effort: z.enum(["low", "medium", "high"]).default("medium"),
 			summary: z.enum(["auto", "concise", "detailed"]).nullable().default(null),
 		})
+		.nullable()
 		.optional(),
 	// store: z.boolean().default(true),
 	stream: z.boolean().default(false),
@@ -211,6 +228,7 @@ export const createResponseParamsSchema = z.object({
 					type: z.literal("function"),
 					description: z.string().optional(),
 				}),
+				webSearchToolSchema,
 				mcpServerParamsSchema,
 			])
 		)
@@ -221,7 +239,43 @@ export const createResponseParamsSchema = z.object({
 	// user
 });
 
+export const createResponseParamsSchema = createResponseParamsBaseSchema.superRefine((params, ctx) => {
+	if (params.previous_response_id && params.conversation) {
+		ctx.addIssue({
+			code: z.ZodIssueCode.custom,
+			path: ["conversation"],
+			message: "conversation cannot be used with previous_response_id",
+		});
+	}
+
+	if (params.input === undefined && !params.previous_response_id && !params.conversation) {
+		ctx.addIssue({
+			code: z.ZodIssueCode.custom,
+			path: ["input"],
+			message: "input is required unless previous_response_id or conversation is provided",
+		});
+	}
+});
+
+export const createConversationParamsSchema = z.object({
+	items: responseInputSchema.max(20).optional(),
+	metadata: metadataSchema,
+});
+
+export const updateConversationParamsSchema = z.object({
+	metadata: metadataSchema,
+});
+
+export const createConversationItemsParamsSchema = z.object({
+	items: responseInputSchema.max(20),
+});
+
 export type CreateResponseParams = z.infer<typeof createResponseParamsSchema>;
+export type ResponseInput = z.infer<typeof responseInputSchema>;
+export type ResponseInputItem = ResponseInput[number];
+export type CreateConversationParams = z.infer<typeof createConversationParamsSchema>;
+export type UpdateConversationParams = z.infer<typeof updateConversationParamsSchema>;
+export type CreateConversationItemsParams = z.infer<typeof createConversationItemsParamsSchema>;
 export type McpServerParams = z.infer<typeof mcpServerParamsSchema>;
 export type McpApprovalRequestParams = z.infer<typeof mcpApprovalRequestParamsSchema>;
 export type McpApprovalResponseParams = z.infer<typeof mcpApprovalResponseParamsSchema>;

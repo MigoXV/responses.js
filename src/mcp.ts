@@ -6,6 +6,9 @@ import { URL } from "url";
 
 import type { McpServerParams } from "./schemas";
 import { McpResultFormatter } from "./lib/McpResultFormatter";
+import { createLogger } from "./lib/logger.js";
+
+const logger = createLogger("mcp");
 
 export async function connectMcpServer(mcpServer: McpServerParams): Promise<Client> {
 	const mcp = new Client({ name: "@huggingface/responses.js", version: packageVersion });
@@ -27,7 +30,9 @@ export async function connectMcpServer(mcpServer: McpServerParams): Promise<Clie
 		await mcp.connect(transport);
 	}
 
-	console.log("Connected to MCP server", mcpServer.server_url);
+	logger.debug("connected to MCP server", {
+		server_url: mcpServer.server_url,
+	});
 
 	return mcp;
 }
@@ -40,7 +45,10 @@ export async function callMcpTool(
 	try {
 		const client = await connectMcpServer(mcpServer);
 		const toolArgs: Record<string, unknown> = argumentsString === "" ? {} : JSON.parse(argumentsString);
-		console.log(`Calling MCP tool '${toolName}'`);
+		logger.debug("calling MCP tool", {
+			server_url: mcpServer.server_url,
+			tool_name: toolName,
+		});
 		const toolResponse = await client.callTool({ name: toolName, arguments: toolArgs });
 		const formattedResult = McpResultFormatter.format(toolResponse);
 		return {
