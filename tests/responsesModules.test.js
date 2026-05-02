@@ -1,5 +1,5 @@
 import { strict as assert } from "assert";
-import { buildResponseInputMessages } from "../src/responses/chatPayload.ts";
+import { buildChatCompletionPayload, buildResponseInputMessages } from "../src/responses/chatPayload.ts";
 import { mapTextFormatToChatResponseFormat, buildDeepseekSystemInstruction } from "../src/responses/deepseek.ts";
 
 const schemaFormat = {
@@ -71,5 +71,83 @@ describe("responses module helpers", function () {
 		});
 		assert.equal(deepseekMessages[0].role, "assistant");
 		assert.match(deepseekMessages[0].content, /Function call/);
+	});
+
+	it("disables DeepSeek thinking mode when tools are present", function () {
+		const payload = buildChatCompletionPayload({
+			body: {
+				model: "deepseek-v4-pro",
+				input: "hello",
+				metadata: null,
+				instructions: null,
+				max_output_tokens: null,
+				conversation: null,
+				previous_response_id: null,
+				stream: true,
+				temperature: 1,
+				top_p: 1,
+			},
+			messages: [{ role: "user", content: "hello" }],
+			tools: [
+				{
+					type: "function",
+					function: {
+						name: "get_weather",
+						parameters: { type: "object", properties: {} },
+					},
+				},
+			],
+			deepseekCompatible: true,
+		});
+
+		assert.deepEqual(payload.thinking, { type: "disabled" });
+	});
+
+	it("disables DeepSeek thinking mode when tool_choice is present", function () {
+		const payload = buildChatCompletionPayload({
+			body: {
+				model: "deepseek-v4-pro",
+				input: "hello",
+				metadata: null,
+				instructions: null,
+				max_output_tokens: null,
+				conversation: null,
+				previous_response_id: null,
+				stream: true,
+				temperature: 1,
+				top_p: 1,
+				tool_choice: {
+					type: "function",
+					name: "get_weather",
+				},
+			},
+			messages: [{ role: "user", content: "hello" }],
+			tools: undefined,
+			deepseekCompatible: true,
+		});
+
+		assert.deepEqual(payload.thinking, { type: "disabled" });
+	});
+
+	it("keeps DeepSeek thinking mode default when no tools or tool_choice are present", function () {
+		const payload = buildChatCompletionPayload({
+			body: {
+				model: "deepseek-v4-pro",
+				input: "hello",
+				metadata: null,
+				instructions: null,
+				max_output_tokens: null,
+				conversation: null,
+				previous_response_id: null,
+				stream: true,
+				temperature: 1,
+				top_p: 1,
+			},
+			messages: [{ role: "user", content: "hello" }],
+			tools: undefined,
+			deepseekCompatible: true,
+		});
+
+		assert.equal(payload.thinking, undefined);
 	});
 });

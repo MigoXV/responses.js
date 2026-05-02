@@ -4,7 +4,11 @@ import type {
 	ChatCompletionTool,
 } from "openai/resources/chat/completions.js";
 import type { CreateResponseParams, ResponseInputItem } from "../schemas.js";
-import { buildDeepseekSystemInstruction, mapTextFormatToChatResponseFormat } from "./deepseek.js";
+import {
+	applyDeepseekThinkingModeForTools,
+	buildDeepseekSystemInstruction,
+	mapTextFormatToChatResponseFormat,
+} from "./deepseek.js";
 import type { JsonSchemaTextFormat } from "./types.js";
 
 export function buildResponseInputMessages(options: {
@@ -47,7 +51,7 @@ export function buildChatCompletionPayload(options: {
 	tools: ChatCompletionTool[] | undefined;
 	deepseekCompatible: boolean;
 }): ChatCompletionCreateParamsStreaming {
-	return {
+	const payload: ChatCompletionCreateParamsStreaming = {
 		// main params
 		model: options.body.model,
 		messages: options.messages,
@@ -73,6 +77,10 @@ export function buildChatCompletionPayload(options: {
 		tools: options.tools,
 		top_p: options.body.top_p,
 	};
+
+	applyDeepseekThinkingModeForTools(payload, options);
+
+	return payload;
 }
 
 function inputItemToChatMessage(
