@@ -1,5 +1,17 @@
 import { type NextFunction, type Request, type Response } from "express";
 
+const unsupportedOutputItemTypes = new Set([
+	"code_interpreter_call",
+	"computer_call",
+	"computer_call_output",
+	"file_search_call",
+	"image_generation_call",
+	"local_shell_call",
+	"local_shell_call_output",
+	"reasoning",
+	"web_search_call",
+]);
+
 const sanitizeInputItem = (item: unknown): unknown => {
 	if (!item || typeof item !== "object") {
 		return item;
@@ -7,7 +19,7 @@ const sanitizeInputItem = (item: unknown): unknown => {
 
 	const typedItem = item as { type?: string; role?: string; content?: unknown };
 
-	if (typedItem.type === "reasoning") {
+	if (typedItem.type && unsupportedOutputItemTypes.has(typedItem.type)) {
 		return null;
 	}
 
