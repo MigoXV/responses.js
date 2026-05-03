@@ -2,7 +2,7 @@ import type { ResponseOutputItem } from "openai/resources/responses/responses";
 import { generateUniqueId } from "../lib/generateUniqueId.js";
 import { stateStore } from "../lib/stateStore.js";
 import { responseInputItemSchema, type CreateResponseParams, type ResponseInputItem } from "../schemas.js";
-import type { IncompleteResponse, ResponseStateContext } from "./types.js";
+import type { IncompleteResponse, ResponseRequestTool, ResponseStateContext } from "./types.js";
 
 function resolveConversationId(conversation: CreateResponseParams["conversation"]): string | undefined {
 	if (!conversation) {
@@ -75,7 +75,7 @@ export function createInitialResponseObject(body: CreateResponseParams): Incompl
 		status: "in_progress",
 		text: body.text,
 		tool_choice: body.tool_choice ?? "auto",
-		tools: body.tools ?? [],
+		tools: redactResponseTools(body.tools ?? []),
 		temperature: body.temperature,
 		top_p: body.top_p,
 		usage: {
@@ -100,6 +100,18 @@ export function persistCompletedResponseState(
 			...responseOutputItems,
 		]);
 	}
+}
+
+function redactResponseTools(tools: ResponseRequestTool[]): ResponseRequestTool[] {
+	return tools.map((tool) => {
+		if (tool.type !== "mcp") {
+			return tool;
+		}
+		const { authorization, headers, ...safeTool } = tool;
+		void authorization;
+		void headers;
+		return safeTool as ResponseRequestTool;
+	});
 }
 
 function getStorableResponseOutputItems(output: ResponseOutputItem[]): ResponseInputItem[] {

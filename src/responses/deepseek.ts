@@ -1,7 +1,8 @@
 import Ajv2020 from "ajv/dist/2020.js";
 import type { ErrorObject } from "ajv";
-import type { ChatCompletionCreateParamsStreaming } from "openai/resources/chat/completions.js";
+import type { ChatCompletionCreateParamsStreaming, ChatCompletionTool } from "openai/resources/chat/completions.js";
 import type { PatchedDeltaWithReasoning, PatchedResponseStreamEvent } from "../openai_patch.js";
+import type { CreateResponseParams } from "../schemas.js";
 import { createOpenAIClient } from "./openaiClient.js";
 import type { IncompleteResponse, JsonSchemaTextFormat, TextFormat } from "./types.js";
 import { StructuredOutputValidationError } from "./types.js";
@@ -9,7 +10,29 @@ import { emitOutputTextMessageStream } from "./streaming.js";
 
 const DEEPSEEK_STRUCTURED_OUTPUT_MAX_RETRIES = 2;
 
+type DeepseekChatCompletionCreateParamsStreaming = ChatCompletionCreateParamsStreaming & {
+	thinking?: {
+		type: "disabled";
+	};
+};
+
 export const isDeepseekModel = (model: string): boolean => model.toLowerCase().includes("deepseek");
+
+export function applyDeepseekThinkingModeForTools(
+	payload: ChatCompletionCreateParamsStreaming,
+	options: {
+		body: CreateResponseParams;
+		tools: ChatCompletionTool[] | undefined;
+		deepseekCompatible: boolean;
+	}
+): void {
+	const hasToolChoice = options.body.tool_choice !== undefined;
+	const hasTools = options.tools !== undefined && options.tools.length > 0;
+
+	if (options.deepseekCompatible && (hasTools || hasToolChoice)) {
+		(payload as DeepseekChatCompletionCreateParamsStreaming).thinking = { type: "disabled" };
+	}
+}
 
 export function getDeepseekJsonSchemaFormat(
 	model: string,

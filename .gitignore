@@ -1,3 +1,6 @@
+data-bin/
+model-bin/
+tmp-workspace/
 # Logs
 logs
 *.log

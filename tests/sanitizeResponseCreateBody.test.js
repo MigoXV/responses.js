@@ -25,12 +25,16 @@ describe("sanitizeResponseCreateBodyPayload", function () {
 				{
 					type: "web_search",
 				},
+				{
+					type: "web_search_preview",
+					search_context_size: "low",
+				},
 			],
 		});
 
 		assert.deepEqual(
 			body.tools.map((tool) => tool.type),
-			["function", "web_search"]
+			["function", "web_search", "web_search_preview"]
 		);
 	});
 });

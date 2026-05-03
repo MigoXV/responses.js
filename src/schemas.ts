@@ -30,6 +30,8 @@ const mcpServerParamsSchema = z.object({
 	server_label: z.string(),
 	server_url: z.string(),
 	type: z.literal("mcp"),
+	authorization: z.string().nullable().optional(),
+	server_description: z.string().nullable().optional(),
 	allowed_tools: z
 		.union([
 			z.array(z.string()),
@@ -152,7 +154,15 @@ const metadataSchema = z
 
 const webSearchToolSchema = z
 	.object({
-		type: z.literal("web_search"),
+		type: z.enum(["web_search", "web_search_preview", "web_search_preview_2025_03_11"]),
+		search_context_size: z.enum(["low", "medium", "high"]).optional(),
+		filters: z
+			.object({
+				allowed_domains: z.array(z.string()).max(100).optional(),
+				blocked_domains: z.array(z.string()).max(100).optional(),
+			})
+			.nullable()
+			.optional(),
 	})
 	.passthrough();
 

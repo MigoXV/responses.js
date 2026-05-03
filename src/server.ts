@@ -22,6 +22,7 @@ import {
 	getConversationItems,
 	getConversationItem,
 	deleteConversationItem,
+	handleMcpRequest,
 } from "./routes/index.js";
 
 export const createApp = (): Express => {
@@ -38,6 +39,7 @@ export const createApp = (): Express => {
 	app.get("/health", getHealth);
 	app.get("/v1/models", getModels);
 	app.get("/v1/models/:modelId", getModelById);
+	app.all("/mcp", handleMcpRequest);
 
 	app.post("/v1/conversations", validateBody(createConversationParamsSchema), postCreateConversation);
 	app.get("/v1/conversations/:conversationId", getConversation);

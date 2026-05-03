@@ -105,6 +105,7 @@ async function* runModelLoopStream(
 	const toolContext: ToolContext = {
 		tools: [],
 		mcpToolsMapping: {},
+		webSearchContextMessages: [],
 	};
 	for await (const event of prepareToolsStream(req.body, responseObject, toolContext)) {
 		yield event;
@@ -119,6 +120,14 @@ async function* runModelLoopStream(
 		deepseekCompatible,
 		deepseekJsonSchemaFormat,
 	});
+	if (toolContext.webSearchContextMessages.length > 0) {
+		const insertIndex = messages.findIndex((message) => message.role !== "system");
+		const contextMessages = toolContext.webSearchContextMessages.map((contextMessage) => ({
+			role: "system",
+			content: contextMessage,
+		})) as typeof messages;
+		messages.splice(insertIndex === -1 ? messages.length : insertIndex, 0, ...contextMessages);
+	}
 	const payload = buildChatCompletionPayload({
 		body: req.body,
 		messages,

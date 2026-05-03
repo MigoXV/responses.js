@@ -4,7 +4,11 @@ import type {
 	ChatCompletionTool,
 } from "openai/resources/chat/completions.js";
 import type { CreateResponseParams, ResponseInputItem } from "../schemas.js";
-import { buildDeepseekSystemInstruction, mapTextFormatToChatResponseFormat } from "./deepseek.js";
+import {
+	applyDeepseekThinkingModeForTools,
+	buildDeepseekSystemInstruction,
+	mapTextFormatToChatResponseFormat,
+} from "./deepseek.js";
 import type { JsonSchemaTextFormat } from "./types.js";
 
 export function buildResponseInputMessages(options: {
@@ -47,7 +51,8 @@ export function buildChatCompletionPayload(options: {
 	tools: ChatCompletionTool[] | undefined;
 	deepseekCompatible: boolean;
 }): ChatCompletionCreateParamsStreaming {
-	return {
+	const toolChoice = buildChatToolChoice(options.body.tool_choice, options.tools);
+	const payload: ChatCompletionCreateParamsStreaming = {
 		// main params
 		model: options.body.model,
 		messages: options.messages,
@@ -59,19 +64,34 @@ export function buildChatCompletionPayload(options: {
 		}),
 		reasoning_effort: options.body.reasoning?.effort,
 		temperature: options.body.temperature,
-		tool_choice:
-			typeof options.body.tool_choice === "string"
-				? options.body.tool_choice
-				: options.body.tool_choice
-					? {
-							type: "function",
-							function: {
-								name: options.body.tool_choice.name,
-							},
-						}
-					: undefined,
+		tool_choice: toolChoice,
 		tools: options.tools,
 		top_p: options.body.top_p,
+	};
+
+	applyDeepseekThinkingModeForTools(payload, options);
+
+	return payload;
+}
+
+function buildChatToolChoice(
+	toolChoice: CreateResponseParams["tool_choice"],
+	tools: ChatCompletionTool[] | undefined
+): ChatCompletionCreateParamsStreaming["tool_choice"] {
+	if (!toolChoice) {
+		return undefined;
+	}
+	if (!tools || tools.length === 0) {
+		return undefined;
+	}
+	if (typeof toolChoice === "string") {
+		return toolChoice;
+	}
+	return {
+		type: "function",
+		function: {
+			name: toolChoice.name,
+		},
 	};
 }
 
