@@ -10,15 +10,24 @@ import { createLogger } from "./lib/logger.js";
 
 const logger = createLogger("mcp");
 
+export function buildMcpRequestHeaders(mcpServer: McpServerParams): Record<string, string> | undefined {
+	const headers = { ...(mcpServer.headers ?? {}) };
+	if (mcpServer.authorization && !Object.keys(headers).some((key) => key.toLowerCase() === "authorization")) {
+		headers.Authorization = mcpServer.authorization;
+	}
+	return Object.keys(headers).length > 0 ? headers : undefined;
+}
+
 export async function connectMcpServer(mcpServer: McpServerParams): Promise<Client> {
 	const mcp = new Client({ name: "@huggingface/responses.js", version: packageVersion });
 
 	// Try to connect with http first, if that fails, try sse
 	const url = new URL(mcpServer.server_url);
+	const headers = buildMcpRequestHeaders(mcpServer);
 	const options = {
-		requestInit: mcpServer.headers
+		requestInit: headers
 			? {
-					headers: mcpServer.headers,
+					headers,
 				}
 			: undefined,
 	};

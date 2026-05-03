@@ -60,6 +60,8 @@ const sanitizeTool = (tool: unknown): unknown => {
 				? tool
 				: null;
 		case "web_search":
+		case "web_search_preview":
+		case "web_search_preview_2025_03_11":
 			return tool;
 		case "mcp":
 			return typeof typedTool.server_label === "string" && typeof typedTool.server_url === "string" ? tool : null;

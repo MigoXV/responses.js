@@ -8,10 +8,12 @@ import type { CreateResponseParams, McpApprovalRequestParams, McpServerParams } 
 import type { IncompleteResponse } from "./types.js";
 import { SEQUENCE_NUMBER_PLACEHOLDER } from "./types.js";
 import type { PatchedResponseStreamEvent } from "../openai_patch.js";
+import { executeWebSearch, webSearchCallStream } from "./webSearch.js";
 
 export interface ToolContext {
 	tools: ChatCompletionTool[];
 	mcpToolsMapping: Record<string, McpServerParams>;
+	webSearchContextMessages: string[];
 }
 
 const logger = createLogger("responses");
@@ -29,6 +31,7 @@ export async function* prepareToolsStream(
 		return;
 	}
 
+	let webSearchExecuted = false;
 	for (const tool of body.tools) {
 		switch (tool.type) {
 			case "function":
@@ -43,8 +46,21 @@ export async function* prepareToolsStream(
 				});
 				break;
 			case "web_search":
-				// Responses hosted tools do not have a Chat Completions equivalent here,
-				// so accept them at the API boundary but do not forward them downstream.
+			case "web_search_preview":
+			case "web_search_preview_2025_03_11":
+				if (!webSearchExecuted && body.tool_choice !== "none") {
+					const execution = await executeWebSearch(tool, body);
+					for await (const event of webSearchCallStream(execution, responseObject)) {
+						yield event;
+					}
+					if (execution.error && body.tool_choice === "required") {
+						throw new Error(`Web search failed: ${execution.error}`);
+					}
+					if (!execution.error) {
+						toolContext.webSearchContextMessages.push(execution.contextMessage);
+					}
+					webSearchExecuted = true;
+				}
 				break;
 			case "mcp": {
 				let mcpListTools: ResponseOutputItem.McpListTools | undefined;
@@ -79,6 +95,7 @@ export async function* prepareToolsStream(
 						: tool.allowed_tools.tool_names
 					: [];
 				if (mcpListTools?.tools) {
+					let forwardedToolCount = 0;
 					for (const mcpTool of mcpListTools.tools) {
 						if (allowedTools.length === 0 || allowedTools.includes(mcpTool.name)) {
 							toolContext.tools.push({
@@ -89,8 +106,17 @@ export async function* prepareToolsStream(
 									description: mcpTool.description ?? undefined,
 								},
 							});
+							forwardedToolCount++;
 						}
 						toolContext.mcpToolsMapping[mcpTool.name] = tool;
+					}
+					if (mcpListTools.tools.length === 0) {
+						mcpListTools.error = `MCP server '${tool.server_label}' returned no tools`;
+					} else if (forwardedToolCount === 0) {
+						mcpListTools.error = `No MCP tools from server '${tool.server_label}' matched allowed_tools`;
+					}
+					if (body.tool_choice === "required" && forwardedToolCount === 0) {
+						throw new Error(mcpListTools.error ?? `No MCP tools are available from server '${tool.server_label}'`);
 					}
 					break;
 				}
@@ -232,6 +258,12 @@ async function* listMcpToolsStream(
 			annotations: mcpTool.annotations,
 			description: mcpTool.description,
 		}));
+		if (outputObject.tools.length === 0) {
+			outputObject.error = `MCP server '${tool.server_label}' returned no tools`;
+			logger.warn("MCP server returned no tools", {
+				server_label: tool.server_label,
+			});
+		}
 		yield {
 			type: "response.output_item.done",
 			output_index: responseObject.output.length - 1,
